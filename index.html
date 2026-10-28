@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>十万母猪 · 河谷史诗 (排队版)</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b1622;font-family:'Microsoft YaHei',sans-serif}
+  #c,#gl{position:fixed;top:0;left:0;width:100%;height:100%}
+  #gl{pointer-events:none}
+  #vig{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0,0,0,.4) 100%)}
+  #plaque{position:fixed;top:18px;left:50%;transform:translateX(-50%);text-align:center;
+    background:rgba(16,24,40,.55);border:2px solid #f5c04e;border-radius:16px;padding:10px 34px;color:#ffe9a8}
+  #plaque .t{font-size:26px;font-weight:bold;letter-spacing:6px;
+    background:linear-gradient(#ffe9a8,#c98a1e);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #plaque .s{font-size:14px;color:#e8d9b0;letter-spacing:1px;margin-top:2px}
+  #ach{display:none;color:#7dff9b;font-weight:bold}
+  #ctrl{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);display:flex;gap:14px;align-items:center;
+    background:rgba(16,24,40,.55);border:1px solid rgba(245,192,78,.6);border-radius:12px;padding:8px 18px;color:#e8d9b0;font-size:14px}
+  #stat{color:#9fc3e0;font-size:12px;min-width:320px}
+  #rate{width:360px}
+  button{background:#f5c04e;border:none;border-radius:8px;padding:5px 14px;font-family:inherit;font-weight:bold;cursor:pointer}
+  #pause{background:#e8d9b0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="gl"></canvas>
+<div id="vig"></div>
+<div id="plaque">
+  <div class="t">十 万 母 猪 · 河 谷 史 诗</div>
+  <div class="s">OPERATION PORK DIVE · 已跳水 <span id="count">0</span> / 100,000 头 <span id="ach">🎉 十万个对不起,已随水流送达!</span></div>
+</div>
+<div id="ctrl">
+  入场流量 <input id="rate" type="range" min="100" max="100000" step="100" value="150">
+  <span id="rateV">140</span> 头/秒
+  <button id="burst">🚀 冲刺十万</button>
+  <button id="snd">🔇 音效</button>
+  <button id="pause">⏸</button>
+  <span id="stat"></span>
+</div>
+<script>
+'use strict';
+window.onerror = function(msg, src, line){ const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:120px;left:8px;color:#ff8080;font:12px monospace;background:rgba(0,0,0,.7);padding:6px;z-index:99;max-width:900px;white-space:pre-wrap';
+  d.textContent = 'ERR: ' + msg + ' @line ' + line; document.body.appendChild(d); };
+/* ════════════════════════════════════════════════════════════
+   排队版
+   - 母猪不再空降:五层木质看台上排队前行,到边缘一只只跳下河谷
+   - GPU 选择:WebGPU(高性能适配器,优先独显) → WebGL2(高性能提示) → Canvas2D
+   - 状态栏显示实际在用的 GPU 与显卡类型
+   ════════════════════════════════════════════════════════════ */
+const W = 1600, H = 900, WATER_Y = 660;
+const TIER_Y = [340, 405, 470, 535, 600], EDGE_X = [560, 610, 660, 710, 760];
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let glc = document.getElementById('gl');
+let DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+let RS = DPR;
+
+/* ── 母猪精灵图:0-2 俯冲(不同翻滚角),3 行走(侧视) ────────── */
+function drawPigDive(g){
+  g.lineCap = 'round';
+  g.strokeStyle = '#d96a95'; g.lineWidth = 2.6;
+  g.beginPath(); g.moveTo(0,-22); g.quadraticCurveTo(7,-27,4,-33); g.quadraticCurveTo(1,-38,-3,-34); g.quadraticCurveTo(-5,-31,-1,-30); g.stroke();
+  g.strokeStyle = '#f2a0c0'; g.lineWidth = 5.5;
+  const leg = (a,b,c2,d)=>{ g.beginPath(); g.moveTo(a,b); g.lineTo(c2,d); g.stroke(); };
+  leg(-12,-4,-23,-11); leg(12,-4,23,-11); leg(-11,10,-21,17); leg(11,10,21,17);
+  g.fillStyle = '#f48fb1'; g.strokeStyle = '#c25e8a'; g.lineWidth = 1.2;
+  g.beginPath(); g.moveTo(-11,-15); g.quadraticCurveTo(-18,-23,-14,-27); g.quadraticCurveTo(-8,-24,-5,-18); g.closePath(); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(11,-15); g.quadraticCurveTo(18,-23,14,-27); g.quadraticCurveTo(8,-24,5,-18); g.closePath(); g.fill(); g.stroke();
+  const rg = g.createRadialGradient(-4,-6,2,0,0,26);
+  rg.addColorStop(0,'#ffe1ec'); rg.addColorStop(.55,'#f9a8c9'); rg.addColorStop(1,'#e87ba6');
+  g.fillStyle = rg; g.beginPath(); g.ellipse(0,0,14,21,0,0,7); g.fill(); g.stroke();
+  g.fillStyle = 'rgba(255,217,230,.55)'; g.beginPath(); g.ellipse(-3,4,7,11,0,0,7); g.fill();
+  g.fillStyle = '#f48fb1'; g.beginPath(); g.ellipse(0,20,8.5,6,0,0,7); g.fill(); g.stroke();
+  g.fillStyle = '#a94d72';
+  g.beginPath(); g.ellipse(-3,21,1.6,2.1,0,0,7); g.fill();
+  g.beginPath(); g.ellipse(3,21,1.6,2.1,0,0,7); g.fill();
+  g.strokeStyle = '#7a3b58'; g.lineWidth = 1.7;
+  g.beginPath(); g.moveTo(-8.5,11.5); g.quadraticCurveTo(-5.5,13.9,-2.5,11.5); g.stroke();
+  g.beginPath(); g.moveTo(2.5,11.5); g.quadraticCurveTo(5.5,13.9,8.5,11.5); g.stroke();
+  g.fillStyle = 'rgba(255,143,179,.5)';
+  g.beginPath(); g.arc(-10,14,2.6,0,7); g.fill();
+  g.beginPath(); g.arc(10,14,2.6,0,7); g.fill();
+}
+function drawPigWalk(g){
+  g.lineCap = 'round';
+  g.strokeStyle = '#d96a95'; g.lineWidth = 2.4;
+  g.beginPath(); g.moveTo(-15,-4); g.quadraticCurveTo(-21,-8,-19,-13); g.quadraticCurveTo(-17,-16,-14,-13); g.stroke();
+  g.fillStyle = '#f48fb1'; g.strokeStyle = '#c25e8a'; g.lineWidth = 1.2;
+  g.beginPath(); g.moveTo(7,-9); g.quadraticCurveTo(8,-16,13,-17); g.quadraticCurveTo(15,-11,11,-6); g.closePath(); g.fill(); g.stroke();
+  g.strokeStyle = '#f2a0c0'; g.lineWidth = 4.6;
+  const leg = (a,b,c2,d)=>{ g.beginPath(); g.moveTo(a,b); g.lineTo(c2,d); g.stroke(); };
+  leg(-10,8,-10,15); leg(-4,9,-4,16); leg(4,9,4,16); leg(10,8,10,15);
+  const rg = g.createRadialGradient(-2,-4,2,0,0,20);
+  rg.addColorStop(0,'#ffe1ec'); rg.addColorStop(.55,'#f9a8c9'); rg.addColorStop(1,'#e87ba6');
+  g.fillStyle = rg; g.beginPath(); g.ellipse(0,0,17,12,0,0,7); g.fill(); g.stroke();
+  g.fillStyle = 'rgba(255,217,230,.5)'; g.beginPath(); g.ellipse(-2,4,10,5,0,0,7); g.fill();
+  g.fillStyle = '#f48fb1'; g.beginPath(); g.ellipse(15,2,5.5,4.5,0,0,7); g.fill(); g.stroke();
+  g.fillStyle = '#a94d72';
+  g.beginPath(); g.ellipse(16.5,1.2,1.2,1.6,0,0,7); g.fill();
+  g.beginPath(); g.ellipse(16.5,3.6,1.2,1.6,0,0,7); g.fill();
+  g.strokeStyle = '#7a3b58'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(5,-2); g.quadraticCurveTo(7,0,9,-2); g.stroke();
+  g.fillStyle = 'rgba(255,143,179,.5)'; g.beginPath(); g.arc(9,3,2.2,0,7); g.fill();
+}
+const pigSprites = [-0.3, 0, 0.3].map(rot=>{
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'); g.translate(64,64); g.rotate(rot); g.scale(2,2); drawPigDive(g);
+  return c;
+}).concat([(()=>{
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'); g.translate(64,64); g.scale(2,2); drawPigWalk(g);
+  return c; })()]);
+const atlas = document.createElement('canvas'); atlas.width = 512; atlas.height = 128;
+{ const g = atlas.getContext('2d'); pigSprites.forEach((s,i)=>g.drawImage(s, i*128, 0)); }
+const SPR = 62, TILE_WALK = 3;
+
+/* ── 粒子小贴图 ─────────────────────────────────────────── */
+const SPR_RING = (()=>{ const c=document.createElement('canvas'); c.width=c.height=64;
+  const g=c.getContext('2d'); g.strokeStyle='#dff4ff'; g.lineWidth=5;
+  g.beginPath(); g.ellipse(32,32,27,8.6,0,0,7); g.stroke(); return c; })();
+const SPR_BUB  = (()=>{ const c=document.createElement('canvas'); c.width=c.height=32;
+  const g=c.getContext('2d'); g.strokeStyle='rgba(220,240,255,.75)'; g.lineWidth=2;
+  g.beginPath(); g.arc(16,16,12,0,7); g.stroke();
+  g.fillStyle='rgba(255,255,255,.5)'; g.beginPath(); g.arc(11,11,3.4,0,7); g.fill(); return c; })();
+const SPR_DROP = (()=>{ const c=document.createElement('canvas'); c.width=c.height=32;
+  const g=c.getContext('2d'); const rg=g.createRadialGradient(16,16,1,16,16,15);
+  rg.addColorStop(0,'rgba(240,250,255,1)'); rg.addColorStop(1,'rgba(240,250,255,0)');
+  g.fillStyle=rg; g.beginPath(); g.arc(16,16,15,0,7); g.fill(); return c; })();
+
+/* ── 静态背景:天空·群山·河岸·五层看台·王座 ───────────────── */
+const bg = document.createElement('canvas'); bg.width = W; bg.height = WATER_Y + 2;
+{
+  const g = bg.getContext('2d');
+  const sky = g.createLinearGradient(0,0,0,WATER_Y);
+  sky.addColorStop(0,'#1c3f6e'); sky.addColorStop(.45,'#5f86b8');
+  sky.addColorStop(.78,'#f2b880'); sky.addColorStop(1,'#ffd9a0');
+  g.fillStyle = sky; g.fillRect(0,0,W,WATER_Y);
+  const ridge = (base, amp, f, phase, color)=>{
+    g.fillStyle = color; g.beginPath(); g.moveTo(0, WATER_Y);
+    for(let x=0; x<=W; x+=8){
+      const y = base - amp*(0.6*Math.sin(x*f+phase) + 0.4*Math.sin(x*f*2.7+phase*1.9) + 0.25*Math.sin(x*f*5.3+phase*0.6)) - amp;
+      g.lineTo(x, y);
+    }
+    g.lineTo(W, WATER_Y); g.closePath(); g.fill();
+  };
+  ridge(WATER_Y-90, 55, 0.004, 1.2, '#8fa8c8');
+  ridge(WATER_Y-40, 70, 0.006, 4.1, '#5d729a');
+  ridge(WATER_Y-8,  55, 0.009, 7.7, '#3d5474');
+  g.fillStyle = 'rgba(30,52,58,.55)';
+  for(let i=0;i<90;i++){
+    const x = Math.random()*W, h = 8+Math.random()*16;
+    const y = WATER_Y-14-Math.abs(Math.sin(x*0.009+7.7))*44;
+    g.beginPath(); g.moveTo(x,y); g.lineTo(x-4,y+h*0.7); g.lineTo(x+4,y+h*0.7); g.closePath(); g.fill();
+  }
+  const bank = (x0, dir)=>{
+    g.fillStyle = '#3f5d43'; g.beginPath();
+    g.moveTo(x0, WATER_Y+2); g.lineTo(x0, WATER_Y-72); g.lineTo(x0+dir*170, WATER_Y+2); g.closePath(); g.fill();
+    g.strokeStyle = '#5a7d4f'; g.lineWidth = 6;
+    g.beginPath(); g.moveTo(x0, WATER_Y-72); g.lineTo(x0+dir*170, WATER_Y+2); g.stroke();
+  };
+  bank(0, 1); bank(W, -1);
+  // 五层排队看台
+  g.fillStyle = '#5d4037';
+  for(let x=112; x<=766; x+=108) g.fillRect(x-5, TIER_Y[0], 10, WATER_Y+8-TIER_Y[0]);
+  for(let i=0;i<5;i++){
+    const len = EDGE_X[i]-90+12;
+    g.fillStyle = '#6d4c41'; g.fillRect(90, TIER_Y[i], len, 12);
+    g.fillStyle = '#a1887f'; g.fillRect(90, TIER_Y[i], len, 3);
+    g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(90, TIER_Y[i]+9, len, 3);
+    g.fillStyle = 'rgba(93,64,55,.9)';
+    for(let x=100; x<EDGE_X[i]; x+=46) g.fillRect(x, TIER_Y[i]-14, 4, 14);
+  }
+  // 母猪王宝座
+  g.fillStyle = '#4e342e'; g.fillRect(452, 324, 36, 18);
+  g.fillStyle = '#8d6e63'; g.fillRect(452, 324, 36, 4);
+}
+/* ── 河床与鹅卵石(静态) ─────────────────────────────────── */
+const bed = document.createElement('canvas'); bed.width = W; bed.height = H - WATER_Y;
+{
+  const g = bed.getContext('2d');
+  const sand = g.createLinearGradient(0,0,0,H-WATER_Y);
+  sand.addColorStop(0,'#4a6b85'); sand.addColorStop(.4,'#37556f'); sand.addColorStop(1,'#1d3a55');
+  g.fillStyle = sand; g.fillRect(0,0,W,H-WATER_Y);
+  const stones = ['#5d7286','#6e8396','#8296a8','#4d6377','#93a5b5','#54708a'];
+  for(let i=0;i<260;i++){
+    const x = Math.random()*W, y = 26+Math.random()*(H-WATER_Y-40);
+    const r = 3+Math.random()*9, a = Math.random()*Math.PI;
+    g.fillStyle = stones[(Math.random()*stones.length)|0];
+    g.beginPath(); g.ellipse(x,y,r,r*0.62,a,0,7); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.18)';
+    g.beginPath(); g.ellipse(x-r*0.25,y-r*0.3,r*0.4,r*0.2,a,0,7); g.fill();
+  }
+  g.fillStyle = '#2c3a3a';
+  g.beginPath(); g.moveTo(1150,H-WATER_Y-6); g.quadraticCurveTo(1200,H-WATER_Y-58,1270,H-WATER_Y-10);
+  g.lineTo(1270,H-WATER_Y+2); g.lineTo(1150,H-WATER_Y+2); g.closePath(); g.fill();
+  g.strokeStyle = '#22302f'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(1210,H-WATER_Y-34); g.lineTo(1210,H-WATER_Y-64); g.stroke();
+}
+
+/* ── 模拟层:SoA + 槽位池 ───────────────────────────────── */
+const MAX = 250000, DEAD = 255;
+const PX = new Float32Array(MAX), PY = new Float32Array(MAX),
+      VX = new Float32Array(MAX), VY = new Float32Array(MAX),
+      SC = new Float32Array(MAX), AL = new Float32Array(MAX),
+      WOB = new Float32Array(MAX),
+      PH = new Uint8Array(MAX).fill(DEAD), VAR = new Uint8Array(MAX), TIER = new Uint8Array(MAX);
+const free = []; let hi = 0;
+/* 流量条映射(内部参数,勿动) */
+const SLIDER_MIN = 100, SLIDER_MAX = 100000, RATE_MAX = 30000;
+const RATE_P = Math.log(RATE_MAX/SLIDER_MIN) / Math.log(SLIDER_MAX/SLIDER_MIN);
+const RATE_K = SLIDER_MIN / Math.pow(SLIDER_MIN, RATE_P);
+const sliderRate = v => Math.round(RATE_K * Math.pow(Math.max(v, SLIDER_MIN), RATE_P));
+let total = 0, rate = sliderRate(150), paused = false, spawnAcc = 0;
+const drops = [], ripples = [], bubbles = [], burst = [];
+let shock = {x:620, r:0, a:0}, shake = 0, shakePow = 1;
+// 母猪王:随机吨位 10-99t,低频随机刷新
+let hero = null, heroNextIn = 2.5;
+// 圣诞驯鹿雪橇:低频横穿,半路坠河
+const deer = [], sinkers = [];
+let deerNextIn = 9 + Math.random()*14;
+let dropBudget = 3, rippleBudget = 1, bubbleBudget = 1;
+
+function spawnPig(){
+  const i = free.length? free.pop() : (hi < MAX? hi++ : -1);
+  if(i < 0) return;
+  const tier = (Math.random()*5)|0;
+  TIER[i] = tier;
+  const span = EDGE_X[tier]-124;
+  PX[i] = 100 + span*Math.pow(Math.random(), 1.6);
+  SC[i] = .55+Math.random()*.95;
+  PY[i] = TIER_Y[tier] - SC[i]*16;
+  VX[i] = Math.min(460, 90+rate*1.05)*(0.8+Math.random()*0.4);
+  VY[i] = 0; PH[i] = 0; VAR[i] = TILE_WALK; AL[i] = 1; WOB[i] = Math.random()*7;
+}
+function kill(i){ PH[i] = DEAD; free.push(i); }
+function pushCap(arr, o, cap){ if(arr.length >= cap){ arr[(Math.random()*cap)|0] = o; } else arr.push(o); }
+function splashAt(x, s, big){
+  const n = big? 26 : dropBudget;
+  for(let i=0;i<n;i++) pushCap(drops, { x:x+(Math.random()-.5)*30*s, y:WATER_Y-2,
+    vx:(Math.random()-.5)*(big?420:190), vy:-(90+Math.random()*(big?380:230)),
+    r:(2+Math.random()*3)*s, life:.7+Math.random()*.5, t:0 }, 4000);
+  if(big || Math.random() < rippleBudget)
+    pushCap(ripples, { x, y: WATER_Y+6, r: 4*s, v: (big?260:110)*s, a:.85, w: 2.4*s }, 1600);
+  if(!big && Math.random()<.2*bubbleBudget)
+    pushCap(bubbles, { x:x+(Math.random()-.5)*20, y:WATER_Y+14, r:1.5+Math.random()*2.5, t:0 }, 900);
+  if(big || Math.random() < 0.2) playSplash(big? .85 : .15+.25*Math.min(s,1.5));
+}
+
+const STEP = 1/60;
+
+/* ── 音效引擎:WebAudio 全合成,无外部文件 ─────────────────── */
+let AC = null, masterGain = null, noiseBuf = null, muted = true, lastSplashSnd = 0;
+function ensureAudio(){
+  if(AC) return;
+  try{
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = AC.createGain(); masterGain.gain.value = .55; masterGain.connect(AC.destination);
+    noiseBuf = AC.createBuffer(1, AC.sampleRate*.5|0, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+  }catch(e){ AC = null; }
+}
+function playSplash(size){                    // 0=小水花 1=巨响
+  if(muted || !AC) return;
+  const t = AC.currentTime;
+  if(t - lastSplashSnd < .08) return;         // 节流:再密也不糊
+  lastSplashSnd = t;
+  const src = AC.createBufferSource(); src.buffer = noiseBuf;
+  const f = AC.createBiquadFilter(); f.type = 'bandpass';
+  f.frequency.value = 1000 - 550*size + Math.random()*250; f.Q.value = .8;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(.001, t);
+  g.gain.exponentialRampToValueAtTime(.05 + .3*size, t+.02);
+  g.gain.exponentialRampToValueAtTime(.001, t+.22+.35*size);
+  src.connect(f); f.connect(g); g.connect(masterGain);
+  src.start(t); src.stop(t+.7);
+}
+function playBoom(power){                     // 母猪王入水闷响
+  if(muted || !AC) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(110 - 30*power, t);
+  o.frequency.exponentialRampToValueAtTime(28, t+.5);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(.001, t);
+  g.gain.exponentialRampToValueAtTime(.4*power + .15, t+.015);
+  g.gain.exponentialRampToValueAtTime(.001, t+.65);
+  o.connect(g); g.connect(masterGain);
+  o.start(t); o.stop(t+.7);
+  const src = AC.createBufferSource(); src.buffer = noiseBuf;
+  const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
+  const g2 = AC.createGain();
+  g2.gain.setValueAtTime(.28*power + .08, t);
+  g2.gain.exponentialRampToValueAtTime(.001, t+.4);
+  src.connect(f); f.connect(g2); g2.connect(masterGain);
+  src.start(t); src.stop(t+.5);
+}
+function playJingle(){                        // 驯鹿铃铛
+  if(muted || !AC) return;
+  const t = AC.currentTime;
+  [1568, 2093].forEach((fq,i)=>{
+    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = fq;
+    const g = AC.createGain();
+    g.gain.setValueAtTime(.001, t+i*.12);
+    g.gain.exponentialRampToValueAtTime(.12, t+i*.12+.01);
+    g.gain.exponentialRampToValueAtTime(.001, t+i*.12+.25);
+    o.connect(g); g.connect(masterGain);
+    o.start(t+i*.12); o.stop(t+i*.12+.3);
+  });
+}
+function update(dt, t){
+  spawnAcc += rate*dt;
+  while(spawnAcc >= 1){ spawnAcc--; spawnPig(); }
+  for(let i=0;i<hi;i++){
+    if(PH[i] === DEAD) continue;
+    if(PH[i] === 0){                          // 看台排队前行
+      PX[i] += VX[i]*dt;
+      if(PX[i] >= EDGE_X[TIER[i]]-4){         // 到达边缘,起跳!
+        PH[i] = 1; VX[i] = VX[i]*0.6+25; VY[i] = -(50+Math.random()*90);
+      }
+    } else if(PH[i] === 1){                   // 腾空一跃
+      VY[i] += 620*dt; PX[i] += VX[i]*dt; PY[i] += VY[i]*dt;
+      if(VY[i] > 130 && VAR[i] === TILE_WALK) VAR[i] = (Math.random()*3)|0;  // 空中切换俯冲姿势
+      if(PY[i] >= WATER_Y+4){
+        PH[i] = 2; total++; PY[i] = WATER_Y+4;
+        VY[i] = 26+Math.random()*22; splashAt(PX[i], SC[i], false);
+      }
+    } else {                                  // 沉入水中,顺流而下
+      const depth = PY[i] - WATER_Y;
+      const cur = 60 + 130*Math.exp(-depth/160);
+      VX[i] += (cur - VX[i])*dt*1.5;
+      VY[i] += (30 - VY[i])*dt;
+      PX[i] += VX[i]*dt; PY[i] += VY[i]*dt;
+      if(depth > H-WATER_Y-60) AL[i] -= dt*1.6;
+      if(PX[i] > W+50 || AL[i] <= .04 || PY[i] > H-8){ kill(i); continue; }
+      if(Math.random() < dt*.5*bubbleBudget)
+        pushCap(bubbles, {x:PX[i], y:PY[i]-8, r:1+Math.random()*2.2, t:0}, 900);
+    }
+  }
+  for(let i=drops.length-1;i>=0;i--){ const d=drops[i]; d.t+=dt; d.vy+=760*dt; d.x+=d.vx*dt; d.y+=d.vy*dt;
+    if(d.t>d.life || d.y>WATER_Y+8){ drops[i]=drops[drops.length-1]; drops.pop(); } }
+  for(let i=ripples.length-1;i>=0;i--){ const r=ripples[i]; r.r+=r.v*dt; r.a-=dt*1.4; r.v*=1-1.2*dt;
+    if(r.a<=0){ ripples[i]=ripples[ripples.length-1]; ripples.pop(); } }
+  for(let i=bubbles.length-1;i>=0;i--){ const b=bubbles[i]; b.t+=dt; b.y-=36*dt; b.x+=Math.sin(t*6+b.y)*10*dt;
+    if(b.y<WATER_Y+6 || b.t>2.4){ bubbles[i]=bubbles[bubbles.length-1]; bubbles.pop(); } }
+  /* 母猪王:随机吨位,低频刷新,吨位越大震得越狠 */
+  if(!hero){
+    heroNextIn -= dt;
+    if(heroNextIn <= 0){
+      const tn = 10 + ((Math.random()*90)|0);
+      const s = 1.9 + tn/99*1.4;
+      hero = { t:0, tn, s, standY: 324 - s*16, standDur: 1.6 + Math.random()*1.8,
+               landX: 590 + tn/99*140 };
+    }
+  } else {
+    hero.t += dt;
+    if(hero.t >= hero.standDur + 1.3){          // 入水!
+      shake = 1; shakePow = 0.5 + hero.tn/99*2.0;
+      shock = {x: hero.landX, r: 30, a: .95};
+      const k = hero.s/2, nb = Math.min(150, (70 + hero.tn*0.8)|0);
+      for(let i=0;i<nb;i++) pushCap(burst, { x:hero.landX+(Math.random()-.5)*46*k, y:WATER_Y-4,
+        vx:(Math.random()-.5)*300, vy:-(120+Math.random()*460), r:(4+Math.random()*13)*k, t:0, life:1+Math.random()*.9, puff:false }, 300);
+      for(let i=0;i<10;i++) pushCap(burst, { x:hero.landX+(Math.random()-.5)*70*k, y:WATER_Y-10-Math.random()*40,
+        vx:(Math.random()-.5)*60, vy:-(40+Math.random()*90), r:(22+Math.random()*26)*k, t:0, life:1.6, puff:true }, 300);
+      splashAt(hero.landX, hero.s*1.4, true);
+      playBoom(.35 + hero.tn/99*1.1);
+      hero = null;
+      // 刷新频率随流量升高(设性能天花板,最多提到 3 倍)
+      const hm = Math.min(3, Math.max(1, rate/800));
+      heroNextIn = (6 + Math.random()*9) / hm;
+    }
+  }
+  /* 圣诞驯鹿:低频横穿,半路坠河;频率随流量升高(封顶 5 倍) */
+  const dm = Math.min(5, Math.max(1, rate/400));
+  deerNextIn -= dt;
+  if(deerNextIn <= 0){
+    if(deer.length < 2){
+      const dir = Math.random()<.5? 1 : -1;
+      deer.push({ x: dir>0? -240 : W+240, y: 90+Math.random()*170,
+        vx: dir*(240+Math.random()*130), t:0, seed: Math.random()*7,
+        fallAt: W*(.3+Math.random()*.45), phase:0, rot:0, vr:(Math.random()-.5)*4, vy:0, flip: dir<0 });
+      playJingle();
+    }
+    deerNextIn = (16 + Math.random()*22) / dm;
+  }
+  for(let i=deer.length-1;i>=0;i--){ const d=deer[i]; d.t+=dt;
+    if(d.phase === 0){                        // 平飞
+      d.x += d.vx*dt; d.y += Math.sin(d.t*2.2+d.seed)*14*dt;
+      if((d.vx>0 && d.x>=d.fallAt) || (d.vx<0 && d.x<=d.fallAt)){ d.phase=1; d.vy=0; }
+      if(d.x < -280 || d.x > W+280){ deer.splice(i,1); }
+    } else {                                  // 坠落(可怜)
+      d.vy += 520*dt; d.x += d.vx*.4*dt; d.y += d.vy*dt; d.rot += d.vr*dt;
+      if(d.y >= WATER_Y+6){
+        splashAt(d.x, 1.5, true); playSplash(.9);
+        sinkers.push({ x:d.x, y:WATER_Y+16, rot:d.rot, vy:40, alpha:1, flip:d.flip });
+        deer.splice(i,1);
+      }
+    }
+  }
+  for(let i=sinkers.length-1;i>=0;i--){ const s=sinkers[i]; s.y+=s.vy*dt; s.vy*=(1-.5*dt);
+    s.alpha-=dt*.45; if(Math.random()<dt*2) pushCap(bubbles,{x:s.x+(Math.random()-.5)*40,y:s.y,r:2+Math.random()*3,t:0},900);
+    if(s.alpha<=0){ sinkers[i]=sinkers[sinkers.length-1]; sinkers.pop(); } }
+  for(let i=burst.length-1;i>=0;i--){ const b=burst[i]; b.t+=dt;
+    if(!b.puff){ b.vy+=430*dt; } else { b.vy*=(1-1.4*dt); b.vx+=Math.sin(b.t*5)*8*dt; }
+    b.x+=b.vx*dt; b.y+=b.vy*dt; if(b.t>b.life){ burst[i]=burst[burst.length-1]; burst.pop(); } }
+  if(shock.a>0){ shock.r += 700*dt; shock.a -= dt*1.3; }
+  shake = Math.max(0, shake - dt*2.2);
+}
+
+/* ── GPU 检测与渲染管线 ────────────────────────────────── */
+function classifyGPU(s){
+  if(/nvidia|geforce|rtx|gtx|quadro/i.test(s)) return ['独立显卡', true];
+  if(/radeon rx|radeon pro|radeon vii|rx \d{3,4}|arc a\d/i.test(s)) return ['独立显卡', true];
+  if(/radeon/i.test(s)) return ['核显/APU', false];
+  if(/intel|uhd|iris|hd graphics/i.test(s)) return ['核显', false];
+  if(/swiftshader|llvmpipe|software/i.test(s)) return ['软件渲染', false];
+  return ['显卡', true];
+}
+let gl = null, prog = null, instBuf = null, vao = null, uWorld = null;
+const INST = new Float32Array(MAX*6);   // x,y,size,tile,alpha,tint
+function resetGLCanvas(){
+  const n = glc.cloneNode(false);
+  glc.replaceWith(n); glc = n;
+}
+function initGL(){
+  try{
+    gl = glc.getContext('webgl2', {alpha:true, premultipliedAlpha:false, antialias:false, depth:false, powerPreference:'high-performance'});
+    if(!gl) return false;
+    const vsh = `#version 300 es
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec2 aPos;
+layout(location=2) in float aSize;
+layout(location=3) in float aTile;
+layout(location=4) in float aAlpha;
+layout(location=5) in float aTint;
+uniform vec2 uWorld;
+out vec2 vUV; out float vA; out float vT;
+void main(){
+  vec2 clip = vec2(aPos.x/uWorld.x*2.-1., 1.-aPos.y/uWorld.y*2.);
+  clip += aCorner*aSize*vec2(2./uWorld.x, -2./uWorld.y);
+  gl_Position = vec4(clip, 0., 1.);
+  vUV = vec2((aTile + aCorner.x + .5)/4., 1.-(aCorner.y+.5));
+  vA = aAlpha; vT = aTint;
+}`;
+    const fsh = `#version 300 es
+precision mediump float;
+in vec2 vUV; in float vA; in float vT;
+uniform sampler2D uTex;
+out vec4 o;
+void main(){
+  vec4 c = texture(uTex, vUV);
+  c.rgb = mix(c.rgb, vec3(.16,.43,.63), vT);
+  o = vec4(c.rgb, c.a*vA);
+}`;
+    const sh = (t,src)=>{ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+      if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; };
+    prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vsh));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fsh));
+    gl.linkProgram(prog);
+    if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) return false;
+    gl.useProgram(prog);
+    uWorld = gl.getUniformLocation(prog, 'uWorld');
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-.5,-.5, .5,-.5, -.5,.5, .5,.5]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    instBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, INST.byteLength, gl.DYNAMIC_DRAW);
+    const [aPos, aSize, aTile, aAlpha, aTint] = [1,2,3,4,5];
+    gl.enableVertexAttribArray(aPos);   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 24, 0);  gl.vertexAttribDivisor(aPos, 1);
+    gl.enableVertexAttribArray(aSize);  gl.vertexAttribPointer(aSize, 1, gl.FLOAT, false, 24, 8);  gl.vertexAttribDivisor(aSize, 1);
+    gl.enableVertexAttribArray(aTile);  gl.vertexAttribPointer(aTile, 1, gl.FLOAT, false, 24, 12); gl.vertexAttribDivisor(aTile, 1);
+    gl.enableVertexAttribArray(aAlpha); gl.vertexAttribPointer(aAlpha,1, gl.FLOAT, false, 24, 16); gl.vertexAttribDivisor(aAlpha,1);
+    gl.enableVertexAttribArray(aTint);  gl.vertexAttribPointer(aTint, 1, gl.FLOAT, false, 24, 20); gl.vertexAttribDivisor(aTint, 1);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    return true;
+  }catch(e){ return false; }
+}
+function glRendererString(){
+  try{
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'WebGL2';
+  }catch(e){ return 'WebGL2'; }
+}
+/* WebGPU 路径:仅当检测到独立显卡时启用;带编译检查与运行时自愈 */
+let wg = null, wgBroken = false;
+async function initWebGPU(adapter){
+  const device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', ()=>{ wgBroken = true; });
+  const gctx = glc.getContext('webgpu');
+  if(!gctx) return false;
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  gctx.configure({device, format, alphaMode:'premultiplied'});
+  const WGSL = `
+struct Inst { pos: vec2<f32>, size: f32, tile: f32, alpha: f32, tint: f32 };
+@group(0) @binding(0) var<storage, read> insts: array<Inst>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var tex: texture_2d<f32>;
+struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) a: f32, @location(2) t: f32 };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
+  var corners = array<vec2<f32>, 4>(vec2<f32>(-0.5,-0.5), vec2<f32>(0.5,-0.5), vec2<f32>(-0.5,0.5), vec2<f32>(0.5,0.5));
+  let q = corners[vi];
+  let I = insts[ii];
+  let world = vec2<f32>(${W}.0, ${H}.0);
+  var clip = vec2<f32>(I.pos.x/world.x*2.0-1.0, 1.0-I.pos.y/world.y*2.0);
+  clip = clip + q*I.size*vec2<f32>(2.0/world.x, -2.0/world.y);
+  var o: VSOut;
+  o.pos = vec4<f32>(clip, 0.0, 1.0);
+  o.uv = vec2<f32>((I.tile + q.x + 0.5)/4.0, 1.0-(q.y+0.5));
+  o.a = I.alpha; o.t = I.tint;
+  return o;
+}
+@fragment fn fs(inp: VSOut) -> @location(0) vec4<f32> {
+  let c = textureSample(tex, samp, inp.uv);
+  let a = c.a * inp.a;
+  let rgb = mix(c.rgb, vec3<f32>(0.16,0.43,0.63), inp.t);
+  return vec4<f32>(rgb*a, a);
+}`;
+  const module = device.createShaderModule({code: WGSL});
+  const ci = await module.getCompilationInfo();
+  const errs = ci.messages.filter(m=>m.type==='error').map(m=>m.message).join(' ;; ');
+  if(errs) throw new Error('WGSL: ' + errs);
+  const quadBuf = device.createBuffer({size: 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(quadBuf, 0, new Float32Array([-.5,-.5,.5,-.5,-.5,.5,.5,.5]));
+  const iBuf = device.createBuffer({size: INST.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
+  const texG = device.createTexture({size:[512,128], format:'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT});
+  device.queue.copyExternalImageToTexture({source: atlas}, {texture: texG}, [512,128]);
+  const sampler = device.createSampler({magFilter:'linear', minFilter:'linear'});
+  const pipeline = device.createRenderPipeline({layout:'auto',
+    vertex:{module, entryPoint:'vs', buffers:[{arrayStride:8, attributes:[{shaderLocation:0, offset:0, format:'float32x2'}]}]},
+    fragment:{module, entryPoint:'fs', targets:[{format,
+      blend:{color:{srcFactor:'one', dstFactor:'one-minus-src-alpha'}, alpha:{srcFactor:'one', dstFactor:'one-minus-src-alpha'}}}]},
+    primitive:{topology:'triangle-strip'}});
+  const bind = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries:[
+    {binding:0, resource:{buffer: iBuf}},
+    {binding:1, resource: sampler},
+    {binding:2, resource: texG.createView()}]});
+  wg = {device, gctx, pipeline, bind, iBuf};
+  return true;
+}
+function renderWebGPU(){
+  if(!instN) return;
+  wg.device.queue.writeBuffer(wg.iBuf, 0, INST, 0, instN*6);
+  const enc = wg.device.createCommandEncoder();
+  const pass = enc.beginRenderPass({colorAttachments:[{view: wg.gctx.getCurrentTexture().createView(),
+    clearValue:{r:0,g:0,b:0,a:0}, loadOp:'clear', storeOp:'store'}]});
+  pass.setPipeline(wg.pipeline); pass.setBindGroup(0, wg.bind);
+  pass.draw(4, instN); pass.end();
+  wg.device.queue.submit([enc.finish()]);
+}
+function renderGL(){
+  gl.viewport(0,0,glc.width,glc.height);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if(!instN) return;
+  gl.uniform2f(uWorld, W, H);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, INST.subarray(0, instN*6));
+  gl.bindVertexArray(vao);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instN);
+}
+/* 渲染器选择:
+   1. WebGPU 适配器且确认为独立显卡 → WebGPU
+   2. 否则 WebGL2(powerPreference=high-performance 提示 Chrome 倾向独显)
+   3. 最后 Canvas2D
+   核显走 WebGL2:部分核显驱动上 WebGPU 画布会静默不出图 */
+let RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
+async function initRenderer(){
+  let triedWebGPU = false;
+  try{
+    if(navigator.gpu){
+      const a = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+      if(a){
+        const info = a.info || {};
+        const nm = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') || 'WebGPU 设备';
+        if(classifyGPU(nm)[1]){                    // 只有独显才走 WebGPU
+          triedWebGPU = true;
+          if(await initWebGPU(a)) return {kind:'webgpu', gpuName:nm, tag: classifyGPU(nm)[0]};
+        }
+      }
+    }
+  }catch(e){ /* 落入 WebGL */ }
+  if(triedWebGPU) resetGLCanvas();        // webgpu 上下文已占用画布,换新画布
+  if(initGL()){
+    const s = glRendererString();
+    return {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]};
+  }
+  resetGLCanvas();
+  return {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
+}
+
+/* ── 缓存渐变 ───────────────────────────────────────────── */
+const gradTint = ctx.createLinearGradient(0,WATER_Y,0,H);
+gradTint.addColorStop(0,'rgba(64,150,200,.30)'); gradTint.addColorStop(.5,'rgba(30,95,150,.42)'); gradTint.addColorStop(1,'rgba(8,38,66,.6)');
+
+/* ── 2D 场景渲染(不含猪) ───────────────────────────────── */
+function render2d(t){
+  ctx.setTransform(RS,0,0,RS,0,0);
+  if(shake>0){ const m=shake*8*shakePow; ctx.translate((Math.random()-.5)*m,(Math.random()-.5)*m); }
+  ctx.drawImage(bg,0,0);
+  if(hero){ ctx.font = "bold 22px 'Microsoft YaHei',sans-serif"; ctx.fillStyle = '#5b3a29'; ctx.textAlign = 'center';
+    ctx.fillText(`母猪王 · ${hero.tn}吨级`, 470, 240); }
+  ctx.save(); ctx.translate(1250,200); ctx.rotate(t*.03);
+  for(let i=0;i<12;i++){ ctx.rotate(Math.PI/6);
+    ctx.fillStyle = i%2? 'rgba(255,242,192,.06)':'rgba(255,242,192,.03)';
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-26,-640); ctx.lineTo(26,-640); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  ctx.fillStyle = '#fff6d8'; ctx.beginPath(); ctx.arc(1250,200,56,0,7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  for(let i=0;i<5;i++){
+    const cx = ((i*377 + t*(12+i*4)) % (W+320)) - 160, cy = 110+i*38;
+    ctx.beginPath(); ctx.ellipse(cx,cy,120,20,0,0,7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx+60,cy-12,70,16,0,0,7); ctx.fill();
+  }
+  ctx.strokeStyle = '#3a3f52'; ctx.lineWidth = 2.6; ctx.lineCap='round';
+  for(let i=0;i<3;i++){
+    const bx = 300+i*70+Math.sin(t*.7+i)*10, by = 195+i*26, f = Math.sin(t*9+i*2)*6;
+    ctx.beginPath(); ctx.moveTo(bx-11,by-f); ctx.quadraticCurveTo(bx,by+4,bx+11,by-f); ctx.stroke();
+  }
+  // 驯鹿雪橇(平飞与坠落)
+  for(const d of deer){
+    ctx.save(); ctx.translate(d.x, d.y);
+    ctx.scale((d.flip? -1:1)*1.35, 1.35);
+    if(d.phase === 1) ctx.rotate(d.rot);
+    paintDeer(ctx, d.phase? d.t*3 : d.t);
+    ctx.restore();
+  }
+  ctx.drawImage(bed, 0, WATER_Y);
+  ctx.strokeStyle = 'rgba(46,94,74,.8)';
+  for(let i=0;i<26;i++){
+    const wx = (i*73+31)%W, wl = 34+((i*37)%52), sw = Math.sin(t*1.6+i)*14 + 16;
+    ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(wx, H);
+    ctx.quadraticCurveTo(wx+sw*.4, H-wl*.55, wx+sw, H-wl); ctx.stroke();
+  }
+  for(const b of bubbles){ ctx.drawImage(SPR_BUB, b.x-b.r, b.y-b.r, b.r*2, b.r*2); }
+  // 沉底的驯鹿雪橇
+  for(const s of sinkers){
+    ctx.save(); ctx.globalAlpha = Math.max(s.alpha,0)*.85;
+    ctx.translate(s.x, s.y); ctx.rotate(s.rot); ctx.scale((s.flip? -1:1)*1.35, 1.35);
+    paintDeer(ctx, 0);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  if(RENDERER.kind === 'canvas2d'){
+    for(let i=0;i<hi;i++){
+      if(PH[i]===2) drawPigAt(PX[i],PY[i],SC[i],VAR[i],AL[i]*.55);
+      else if(PH[i]<2) drawPigAt(PX[i],PY[i],SC[i],VAR[i],1);
+    }
+  }
+  ctx.fillStyle = gradTint; ctx.fillRect(0,WATER_Y,W,H-WATER_Y);
+  for(let i=0;i<7;i++){
+    const lx = ((i*251 + t*46) % (W+300)) - 150;
+    ctx.fillStyle = 'rgba(210,240,255,.05)';
+    ctx.beginPath(); ctx.moveTo(lx,WATER_Y); ctx.lineTo(lx+52,WATER_Y); ctx.lineTo(lx+130,H); ctx.lineTo(lx+34,H); ctx.closePath(); ctx.fill();
+  }
+  for(let k=0;k<2;k++){
+    ctx.fillStyle = k? 'rgba(160,220,250,.28)':'rgba(210,240,255,.5)';
+    ctx.beginPath(); ctx.moveTo(0,WATER_Y+2);
+    for(let x=0;x<=W;x+=16) ctx.lineTo(x, WATER_Y + Math.sin(x*.02 + t*(2.2+k) + k*2.4)*4.5);
+    ctx.lineTo(W,WATER_Y+14+k*7); ctx.lineTo(0,WATER_Y+14+k*7); ctx.closePath(); ctx.fill();
+  }
+  for(let i=0;i<24;i++){
+    const gx = ((i*97 + t*130) % W), gy = WATER_Y + 6 + (i*29)%22;
+    ctx.fillStyle = `rgba(255,236,180,${.14+.12*Math.sin(t*3+i)})`;
+    ctx.beginPath(); ctx.ellipse(gx,gy,16,2.4,0,0,7); ctx.fill();
+  }
+  for(const r of ripples){
+    ctx.globalAlpha = Math.max(r.a,0);
+    ctx.drawImage(SPR_RING, r.x-r.r, r.y-r.r*.32, r.r*2, r.r*.64);
+  }
+  ctx.globalAlpha = 1;
+  if(shock.a>0){
+    ctx.strokeStyle = `rgba(255,255,255,${shock.a})`; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.ellipse(shock.x,WATER_Y+8,shock.r,shock.r*.16,0,0,7); ctx.stroke();
+  }
+  for(const b of burst){
+    const a = 1 - b.t/b.life;
+    ctx.fillStyle = b.puff? `rgba(240,250,255,${a*.75})` : `rgba(235,248,255,${a*.9})`;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r*(b.puff? 1+b.t*.5 : 1),0,7); ctx.fill();
+  }
+  for(const d of drops){
+    ctx.globalAlpha = 1-d.t/d.life;
+    ctx.drawImage(SPR_DROP, d.x-d.r, d.y-d.r, d.r*2, d.r*2);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawPigAt(x,y,s,variant,alpha){
+  ctx.globalAlpha = alpha;
+  const d = SPR*s;
+  ctx.drawImage(pigSprites[variant], x-d/2, y-d/2, d, d);
+  ctx.globalAlpha = 1;
+}
+/* 圣诞驯鹿雪橇(朝右,原点在雪橇与鹿队中间) */
+function paintDeer(g, t){
+  const leg = (a,b,c2,d)=>{ g.beginPath(); g.moveTo(a,b); g.lineTo(c2,d); g.stroke(); };
+  g.save(); g.translate(-44,0);
+  // 圣诞老人
+  g.fillStyle = '#c62828'; g.beginPath(); g.ellipse(-6,-14,8,10,0,0,7); g.fill();
+  g.fillStyle = '#ffd9b3'; g.beginPath(); g.arc(-6,-26,4.5,0,7); g.fill();
+  g.fillStyle = '#c62828'; g.beginPath(); g.moveTo(-11,-28); g.lineTo(-1,-28); g.lineTo(-6,-38); g.closePath(); g.fill();
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(-6,-38,2.2,0,7); g.fill();
+  g.beginPath(); g.ellipse(-2.5,-22,3.5,2,-.4,0,7); g.fill();
+  g.fillStyle = '#2e5d34'; g.beginPath(); g.ellipse(7,-18,7,8,0,0,7); g.fill();
+  // 雪橇体 + 滑轨
+  g.fillStyle = '#c62828'; g.beginPath();
+  g.moveTo(-18,4); g.quadraticCurveTo(-20,-6,-10,-6); g.lineTo(12,-6);
+  g.quadraticCurveTo(20,-6,18,2); g.quadraticCurveTo(24,2,22,6); g.lineTo(-16,6); g.closePath(); g.fill();
+  g.strokeStyle = '#f5c04e'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(-19,9); g.lineTo(20,9); g.stroke();
+  g.restore();
+  // 缰绳
+  g.strokeStyle = '#8d6e63'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(-30,-10); g.quadraticCurveTo(-10,-14,8,-8); g.stroke();
+  // 两只驯鹿(领头的是红鼻子)
+  for(let k=0;k<2;k++){
+    g.save(); g.translate(8+k*30, k? -2:0);
+    const gp = Math.sin(t*13 + k*1.7)*.6;
+    g.fillStyle = '#8d6e63';
+    g.beginPath(); g.ellipse(0,-8,11,6.5,-.08,0,7); g.fill();
+    g.beginPath(); g.arc(10,-15,4.5,0,7); g.fill();
+    g.beginPath(); g.ellipse(13.5,-13.5,2.5,1.8,0,0,7); g.fill();
+    g.strokeStyle = '#5d4037'; g.lineWidth = 1.6;
+    g.beginPath(); g.moveTo(9,-19); g.lineTo(6,-26); g.moveTo(7,-22); g.lineTo(4,-25);
+    g.moveTo(12,-19); g.lineTo(14,-26); g.moveTo(13,-22); g.lineTo(16,-24); g.stroke();
+    g.strokeStyle = '#8d6e63'; g.lineWidth = 2.6;
+    leg(-7,-4,-11,4+gp*3); leg(-3,-4,-2,5-gp*3); leg(4,-4,7,4+gp*2.5); leg(8,-4,12,5-gp*2.5);
+    if(k===0){
+      g.fillStyle = 'rgba(255,80,80,.35)'; g.beginPath(); g.arc(15,-13,4.5,0,7); g.fill();
+      g.fillStyle = '#ff2d2d'; g.beginPath(); g.arc(15,-13,2.2,0,7); g.fill();
+    }
+    g.restore();
+  }
+}
+
+/* ── 实例收集:排队摇摆 / 腾空 / 水下 ───────────────────── */
+let instN = 0;
+function buildInstances(t){
+  instN = 0;
+  for(let i=0;i<hi;i++){
+    if(PH[i] === DEAD) continue;
+    const o = instN*6;
+    let py = PY[i], tile = VAR[i], alpha = 1, tint = 0;
+    if(PH[i] === 0){                                     // 排队小碎步 + 摇摆
+      py += Math.abs(Math.sin(t*11 + WOB[i]))*2.2*SC[i];
+    } else if(PH[i] === 1){                              // 腾空
+      // 保持行走贴图,直到切换俯冲
+    } else {                                             // 水下
+      const depth = py - WATER_Y;
+      alpha = AL[i]*(0.35+0.65*Math.min(1,depth/24));
+      tint = Math.min(.45, .12 + depth/500);
+    }
+    INST[o] = PX[i]; INST[o+1] = py;
+    INST[o+2] = SPR*SC[i]; INST[o+3] = tile;
+    INST[o+4] = alpha; INST[o+5] = tint;
+    instN++;
+  }
+  // 母猪王:宝座上等候摇晃 → 纵身一跃(吨位越大越肥,跳得越远)
+  if(hero){
+    if(hero.t < hero.standDur){
+      pushHero(HERO_PED_X, hero.standY + Math.abs(Math.sin(hero.t*9))*2, TILE_WALK, hero.s);
+    } else {
+      const u = (hero.t - hero.standDur)/1.3;
+      const hx = HERO_PED_X + (hero.landX - HERO_PED_X)*u;
+      const hy = hero.standY - (110 + hero.tn)*Math.sin(Math.PI*u) + u*u*((WATER_Y+14) - hero.standY);
+      pushHero(hx, hy, u > .45? 1 : TILE_WALK, hero.s);
+    }
+  }
+}
+const HERO_PED_X = 470;
+function pushHero(x,y,tile,s){
+  const o = instN*6;
+  INST[o]=x; INST[o+1]=y; INST[o+2]=SPR*s; INST[o+3]=tile; INST[o+4]=1; INST[o+5]=0;
+  instN++;
+}
+
+/* ── 自适应画质 ─────────────────────────────────────────── */
+function applyQuality(q){
+  RS = [0.75, 1, Math.min(DPR,1.5)][q];
+  dropBudget = [0, 1, 3][q];
+  rippleBudget = [.25, .55, 1][q];
+  bubbleBudget = [.4, .7, 1][q];
+  for(const c of [cv, glc]){ c.width = Math.round(W*RS); c.height = Math.round(H*RS); }
+}
+
+/* ── 主循环 ─────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+function countAlive(){ let n=0; for(let i=0;i<hi;i++) if(PH[i]!==DEAD) n++; return n; }
+let last = performance.now(), fps = 60, hudT = 0, acc = 0, qCheck = 0, quality = 2;
+let fpsFrames = 0, fpsTime = 0;
+function loop(now){
+  requestAnimationFrame(loop);
+  let dt = Math.min((now-last)/1000, .1); last = now;
+  fpsFrames++; fpsTime += dt;
+  if(fpsTime >= .5){ fps = fpsFrames/fpsTime; fpsFrames = 0; fpsTime = 0; }
+  if(!paused){
+    acc = Math.min(acc + dt, .25);
+    while(acc >= STEP){ update(STEP, now/1000 - acc); acc -= STEP; }
+  }
+  buildInstances(now/1000);
+  render2d(now/1000);
+  if(RENDERER.kind === 'webgpu'){
+    renderWebGPU();
+    if(wgBroken){                          // WebGPU 运行时自愈 → 切回 WebGL2
+      wgBroken = false; resetGLCanvas();
+      if(initGL()){ const s = glRendererString();
+        RENDERER = {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]}; }
+      else RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
+    }
+  }
+  else if(RENDERER.kind === 'webgl2') renderGL();
+  qCheck += dt;
+  if(qCheck > 1.2){ qCheck = 0;
+    if(fps < 42 && quality > 0){ quality--; applyQuality(quality); }
+    else if(fps > 57 && quality < 2){ quality++; applyQuality(quality); }
+  }
+  hudT += dt;
+  if(hudT > .25){ hudT = 0;
+    $('count').textContent = total.toLocaleString();
+    $('stat').textContent = `GPU: ${RENDERER.gpuName.slice(0,42)} (${RENDERER.tag}) · ${RENDERER.kind} · ${fps|0} FPS · 在场 ${countAlive().toLocaleString()} · 画质档${quality}`
+      + (RENDERER.tag === '独立显卡'? '' : ' · 想用独显:Win设置→屏幕→显示卡→将浏览器设为"高性能"');
+    if(total >= 100000) $('ach').style.display = 'inline';
+  }
+}
+async function main(){
+  // 预演测试模式: ?t=秒数
+  const PRE = Math.min(parseFloat(new URLSearchParams(location.search).get('t') || '0') || 0, 120);
+  for(let i=0; i < PRE*60; i++) update(STEP, i*STEP);
+  RENDERER = await initRenderer();
+  applyQuality(quality);
+  $('rateV').textContent = rate.toLocaleString();
+  // 确定性测试钩子: ?deer=1&hero=1 强制展示驯鹿与母猪王
+  const Q = new URLSearchParams(location.search);
+  if(Q.get('deer') === '1')
+    deer.push({x:W*.5, y:150, vx:40, t:0, seed:1, fallAt:W*.9, phase:0, rot:0, vr:0, vy:0, flip:false});
+  if(Q.get('hero') === '1'){
+    const tn = 66, s = 1.9 + tn/99*1.4;
+    hero = {t:0, tn, s, standY: 324 - s*16, standDur: 1e9, landX: 680};
+  }
+  if(PRE > 0){ $('count').textContent = total.toLocaleString(); }
+  requestAnimationFrame(loop);
+}
+main();
+addEventListener('resize', ()=>applyQuality(quality));
+$('rate').oninput = e => { rate = sliderRate(+e.target.value); $('rateV').textContent = rate.toLocaleString(); };
+$('burst').onclick = () => { rate = sliderRate(SLIDER_MAX); $('rate').value = SLIDER_MAX; $('rateV').textContent = rate.toLocaleString(); };
+$('snd').onclick = () => {
+  muted = !muted;
+  if(!muted){ ensureAudio(); if(AC && AC.state === 'suspended') AC.resume(); }
+  $('snd').textContent = muted? '🔇 音效' : '🔊 音效';
+};
+$('pause').onclick = () => { paused = !paused; $('pause').textContent = paused? '▶':'⏸'; };
+</script>
+</body>
+</html>
