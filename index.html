@@ -13,7 +13,7 @@
   html,body{margin:0;height:100%;overflow:hidden;background:#08111b;
     font-family:'Microsoft YaHei UI','PingFang SC',system-ui,sans-serif;
     -webkit-font-smoothing:antialiased}
-  #c,#gl{position:fixed;top:0;left:0;width:100%;height:100%;display:block}
+  #c,#gl{position:fixed;top:0;left:0;display:block;width:100%;height:100%}
   #gl{pointer-events:none}
   /* 电影感暗角 + 极淡暖色调 */
   #vig{position:fixed;inset:0;pointer-events:none;z-index:2;
@@ -23,6 +23,7 @@
    }
   /* ── 标题牌 ─────────────────────────────── */
   #plaque{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:3;
+    width:max-content;max-width:calc(100vw - 24px);
     text-align:center;padding:13px 40px 11px;border-radius:3px;
     background:
       linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0) 42%),
@@ -42,7 +43,9 @@
   #ach{display:none;color:#8ce6a8;font-weight:600}
   /* ── 控制台 ─────────────────────────────── */
   #ctrl{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:3;
-    display:flex;gap:16px;align-items:center;padding:10px 20px;border-radius:12px;
+    display:flex;gap:12px 16px;align-items:center;justify-content:center;flex-wrap:wrap;
+    width:max-content;max-width:calc(100vw - 20px);
+    padding:10px 20px;border-radius:12px;
     background:
       linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,0) 46%),
       linear-gradient(180deg, rgba(11,20,32,.92), rgba(6,11,19,.82));
@@ -87,7 +90,17 @@
   #mark{position:fixed;left:22px;bottom:20px;z-index:3;color:rgba(232,213,176,.34);
     font-size:10.5px;letter-spacing:.3em;text-transform:uppercase;pointer-events:none;
     font-family:'Optima','Palatino Linotype',Georgia,serif}
-  @media (max-width:1180px){ #stat{display:none} #rate{width:230px} }
+  @media (max-width:1180px){ #stat{display:none} #rate{width:240px} }
+  @media (max-width:900px){
+    #rate{width:min(52vw,300px)}
+    #ctrl{padding:8px 12px;gap:8px 12px;bottom:10px;font-size:12px}
+    #ctrl .lab{font-size:10.5px;letter-spacing:.08em}
+    #plaque{top:10px;padding:8px 16px;max-width:calc(100vw - 20px)}
+    #plaque .t{font-size:18px;letter-spacing:.26em;text-indent:.26em}
+    #plaque .s{font-size:9.5px;letter-spacing:.12em}
+    #mark{display:none}
+    button{padding:6px 11px;font-size:11.5px}
+  }
 </style>
 </head>
 <body>
@@ -122,9 +135,10 @@ window.onerror = function(msg, src, line){
    · 五层木质看台排队 → 逐只跃入河谷 → 水下顺流漂走
    · 随机吨位母猪王(10-99t),吨位决定体型/水花/震屏
    · 圣诞驯鹿雪橇随机横穿,半路坠河
-   · 渲染:WebGPU(仅独显) → WebGL2(高性能) → Canvas2D
+   · 渲染:WebGL2 实例化(powerPreference=high-performance 争取独显) → Canvas2D 兜底
+     启动时回读像素自检,驱动静默失败则自动降级
    性能:存活链表 O(在场) 遍历 / exp 查表 / 水花按流量抽样 /
-        bufferSubData 免视图 / 逐帧模拟步数封顶
+        bufferSubData 免视图 / 逐帧模拟步数封顶 / 光效全精灵化
    ══════════════════════════════════════════════════════════════════ */
 const W = 1600, H = 900, WATER_Y = 660;
 const TIER_Y = [340, 405, 470, 535, 600], EDGE_X = [560, 610, 660, 710, 760];
@@ -730,13 +744,15 @@ function update(dt, t){
 }
 
 /* ══ GPU 检测与管线 ═══════════════════════════════════════ */
+/* GPU 分类:仅用于如实显示;未知/移动 GPU 一律按非独显处理(安全侧) */
 function classifyGPU(s){
   if(/nvidia|geforce|rtx|gtx|quadro/i.test(s)) return ['独立显卡', true];
   if(/radeon rx|radeon pro|radeon vii|rx \d{3,4}|arc a\d/i.test(s)) return ['独立显卡', true];
+  if(/adreno|mali|powervr|imagination|apple|arm |tegra|qualcomm/i.test(s)) return ['移动 GPU', false];
   if(/radeon/i.test(s)) return ['核显/APU', false];
   if(/intel|uhd|iris|hd graphics/i.test(s)) return ['核显', false];
-  if(/swiftshader|llvmpipe|software/i.test(s)) return ['软件渲染', false];
-  return ['显卡', true];
+  if(/swiftshader|llvmpipe|software|basic render/i.test(s)) return ['软件渲染', false];
+  return ['显卡', false];
 }
 let gl = null, prog = null, instBuf = null, vao = null, uWorld = null;
 const INST = new Float32Array(MAX*6);
@@ -747,7 +763,7 @@ function resetGLCanvas(){
 function initGL(){
   try{
     gl = glc.getContext('webgl2', {alpha:true, premultipliedAlpha:false, antialias:false,
-      depth:false, stencil:false, powerPreference:'high-performance', desynchronized:true});
+      depth:false, stencil:false, powerPreference:'high-performance'});
     if(!gl) return false;
     const vsh = `#version 300 es
 layout(location=0) in vec2 aCorner;
@@ -813,75 +829,6 @@ function glRendererString(){
     return ext? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'WebGL2';
   }catch(e){ return 'WebGL2'; }
 }
-let wg = null, wgBroken = false;
-async function initWebGPU(adapter){
-  const device = await adapter.requestDevice();
-  device.addEventListener('uncapturederror', ()=>{ wgBroken = true; });
-  const gctx = glc.getContext('webgpu');
-  if(!gctx) return false;
-  const format = navigator.gpu.getPreferredCanvasFormat();
-  gctx.configure({device, format, alphaMode:'premultiplied'});
-  const WGSL = `
-struct Inst { pos: vec2<f32>, size: f32, tile: f32, alpha: f32, tint: f32 };
-@group(0) @binding(0) var<storage, read> insts: array<Inst>;
-@group(0) @binding(1) var samp: sampler;
-@group(0) @binding(2) var tex: texture_2d<f32>;
-struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) a: f32, @location(2) t: f32 };
-@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
-  var corners = array<vec2<f32>, 4>(vec2<f32>(-0.5,-0.5), vec2<f32>(0.5,-0.5), vec2<f32>(-0.5,0.5), vec2<f32>(0.5,0.5));
-  let q = corners[vi];
-  let I = insts[ii];
-  let world = vec2<f32>(${W}.0, ${H}.0);
-  var clip = vec2<f32>(I.pos.x/world.x*2.0-1.0, 1.0-I.pos.y/world.y*2.0);
-  clip = clip + q*I.size*vec2<f32>(2.0/world.x, -2.0/world.y);
-  var o: VSOut;
-  o.pos = vec4<f32>(clip, 0.0, 1.0);
-  o.uv = vec2<f32>((I.tile + q.x + 0.5)/4.0, 1.0-(q.y+0.5));
-  o.a = I.alpha; o.t = I.tint;
-  return o;
-}
-@fragment fn fs(inp: VSOut) -> @location(0) vec4<f32> {
-  let c = textureSample(tex, samp, inp.uv);
-  let a = c.a * inp.a;
-  let rgb = mix(c.rgb, vec3<f32>(0.13,0.36,0.55), inp.t);
-  return vec4<f32>(rgb*a, a);
-}`;
-  const module = device.createShaderModule({code: WGSL});
-  const ci = await module.getCompilationInfo();
-  const errs = ci.messages.filter(m=>m.type==='error').map(m=>m.message).join(' ;; ');
-  if(errs) throw new Error('WGSL: ' + errs);
-  const quadBuf = device.createBuffer({size:32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST});
-  device.queue.writeBuffer(quadBuf, 0, new Float32Array([-.5,-.5,.5,-.5,-.5,.5,.5,.5]));
-  const iBuf = device.createBuffer({size: INST.byteLength,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
-  const texG = device.createTexture({size:[512,128], format:'rgba8unorm',
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT});
-  device.queue.copyExternalImageToTexture({source: atlas}, {texture: texG}, [512,128]);
-  const sampler = device.createSampler({magFilter:'linear', minFilter:'linear'});
-  const pipeline = device.createRenderPipeline({layout:'auto',
-    vertex:{module, entryPoint:'vs', buffers:[{arrayStride:8,
-      attributes:[{shaderLocation:0, offset:0, format:'float32x2'}]}]},
-    fragment:{module, entryPoint:'fs', targets:[{format,
-      blend:{color:{srcFactor:'one', dstFactor:'one-minus-src-alpha'},
-             alpha:{srcFactor:'one', dstFactor:'one-minus-src-alpha'}}}]},
-    primitive:{topology:'triangle-strip'}});
-  const bind = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries:[
-    {binding:0, resource:{buffer: iBuf}},
-    {binding:1, resource: sampler},
-    {binding:2, resource: texG.createView()}]});
-  wg = {device, gctx, pipeline, bind, iBuf};
-  return true;
-}
-function renderWebGPU(){
-  if(!instN) return;
-  wg.device.queue.writeBuffer(wg.iBuf, 0, INST, 0, instN*6);
-  const enc = wg.device.createCommandEncoder();
-  const pass = enc.beginRenderPass({colorAttachments:[{view: wg.gctx.getCurrentTexture().createView(),
-    clearValue:{r:0,g:0,b:0,a:0}, loadOp:'clear', storeOp:'store'}]});
-  pass.setPipeline(wg.pipeline); pass.setBindGroup(0, wg.bind);
-  pass.draw(4, instN); pass.end();
-  wg.device.queue.submit([enc.finish()]);
-}
 function renderGL(){
   gl.viewport(0,0,glc.width,glc.height);
   gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -892,29 +839,27 @@ function renderGL(){
   gl.bindVertexArray(vao);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instN);
 }
-let RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
-async function initRenderer(){
-  let triedWebGPU = false;
+/* 自检:真画一只猪再回读中心像素,确认 GL 通道真的出图(防驱动静默失败) */
+function glLooksAlive(){
   try{
-    if(navigator.gpu){
-      const a = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
-      if(a){
-        const info = a.info || {};
-        const nm = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') || 'WebGPU 设备';
-        if(classifyGPU(nm)[1]){
-          triedWebGPU = true;
-          if(await initWebGPU(a)) return {kind:'webgpu', gpuName:nm, tag: classifyGPU(nm)[0]};
-        }
-      }
-    }
-  }catch(e){}
-  if(triedWebGPU) resetGLCanvas();
+    const savedN = instN;
+    INST[0]=W/2; INST[1]=H/2; INST[2]=SPR; INST[3]=1; INST[4]=1; INST[5]=0;
+    instN = 1;
+    renderGL();
+    const px = new Uint8Array(4);
+    gl.readPixels(glc.width>>1, glc.height>>1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    instN = savedN;
+    return px[3] > 8;
+  }catch(e){ return false; }
+}
+let RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
+function initRenderer(){
   if(initGL()){
     const s = glRendererString();
-    return {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]};
+    if(glLooksAlive()) return {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]};
+    resetGLCanvas();                     // GL 配好了却不出图 → 换新画布,退回 2D
   }
-  resetGLCanvas();
-  return {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
+  return {kind:'canvas2d', gpuName:'软件渲染 · Canvas2D', tag:'软件渲染'};
 }
 
 /* ══ 缓存渐变与图案 ═══════════════════════════════════════ */
@@ -1192,6 +1137,18 @@ function applyQuality(q){
     const w = Math.round(W*RS), h = Math.round(H*RS);
     if(c.width !== w || c.height !== h){ c.width = w; c.height = h; }
   }
+  fitCanvas();
+}
+/* 画布按 16:9 等比适配视口(contain),竖屏不再被拉扁 */
+function fitCanvas(){
+  const vw = innerWidth, vh = innerHeight;
+  const s = Math.min(vw/W, vh/H);
+  const w = Math.round(W*s), h = Math.round(H*s);
+  const x = Math.round((vw - w)/2), y = Math.round((vh - h)/2);
+  for(const c of [cv, glc]){
+    c.style.width = w+'px'; c.style.height = h+'px';
+    c.style.left = x+'px'; c.style.top = y+'px';
+  }
 }
 
 /* ══ 主循环 ═══════════════════════════════════════════════ */
@@ -1215,15 +1172,7 @@ function loop(now){
   const t = now/1000;
   buildInstances(t);
   render2d(t);
-  if(RENDERER.kind === 'webgpu'){
-    renderWebGPU();
-    if(wgBroken){
-      wgBroken = false; resetGLCanvas();
-      if(initGL()){ const s = glRendererString();
-        RENDERER = {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]}; }
-      else RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
-    }
-  } else if(RENDERER.kind === 'webgl2') renderGL();
+  if(RENDERER.kind === 'webgl2') renderGL();
   qCheck += dt;
   if(qCheck > 1.2){
     qCheck = 0;
