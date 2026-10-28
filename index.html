@@ -90,8 +90,12 @@
   #mark{position:fixed;left:22px;bottom:20px;z-index:3;color:rgba(232,213,176,.34);
     font-size:10.5px;letter-spacing:.3em;text-transform:uppercase;pointer-events:none;
     font-family:'Optima','Palatino Linotype',Georgia,serif}
-  @media (max-width:1180px){ #stat{display:none} #rate{width:240px} }
-  @media (max-width:900px){
+  /* 诊断条:排查黑屏用,常显 */
+  #diag{position:fixed;left:8px;top:8px;z-index:4;pointer-events:none;
+    font:10px/1.45 ui-monospace,Consolas,monospace;color:rgba(180,214,240,.72);
+    background:rgba(4,10,18,.55);border:1px solid rgba(120,170,210,.18);
+    border-radius:5px;padding:4px 7px;white-space:pre;max-width:44vw;overflow:hidden}
+  @media (max-width:1180px){ #stat{display:none} #rate{width:240px} }  @media (max-width:900px){
     #rate{width:min(52vw,300px)}
     #ctrl{padding:8px 12px;gap:8px 12px;bottom:10px;font-size:12px}
     #ctrl .lab{font-size:10.5px;letter-spacing:.08em}
@@ -121,6 +125,7 @@
   <span id="stat"></span>
 </div>
 <div id="mark">Valley of Ten Thousand Sows</div>
+<div id="diag">booting…</div>
 <script>
 'use strict';
 window.onerror = function(msg, src, line){
@@ -235,6 +240,15 @@ const pigSprites = [-0.3, 0, 0.3].map(rot=>{
 })()]);
 const atlas = mkCanvas(512,128);
 { const g = atlas.getContext('2d'); pigSprites.forEach((s,i)=>g.drawImage(s, i*128, 0)); }
+/* Canvas2D 兜底用的"水下蓝调"版本 */
+const underSprites = pigSprites.map(s=>{
+  const c = mkCanvas(128,128), g = c.getContext('2d');
+  g.drawImage(s,0,0);
+  g.globalCompositeOperation = 'source-atop';
+  g.fillStyle = 'rgba(16,70,108,.55)';
+  g.fillRect(0,0,128,128);
+  return c;
+});
 const SPR = 62, TILE_WALK = 3;
 
 /* ══ 粒子与光效贴图(全部预渲染,运行时只 blit) ═════════════ */
@@ -739,7 +753,7 @@ function update(dt, t){
     b.x += b.vx*dt; b.y += b.vy*dt;
     if(b.t > b.life){ burst[i]=burst[burst.length-1]; burst.pop(); }
   }
-  if(shock.a > 0){ shock.r += 700*dt; shock.a -= dt*1.3; }
+  if(shock.a > 0){ shock.r += 430*dt; shock.a -= dt*1.7; }
   shake = Math.max(0, shake - dt*2.2);
 }
 
@@ -754,7 +768,7 @@ function classifyGPU(s){
   if(/swiftshader|llvmpipe|software|basic render/i.test(s)) return ['软件渲染', false];
   return ['显卡', false];
 }
-let gl = null, prog = null, instBuf = null, vao = null, uWorld = null;
+let gl = null, prog = null, instBuf = null, vao = null, uWorld = null, GL_LOST = false;
 const INST = new Float32Array(MAX*6);
 function resetGLCanvas(){
   const n = glc.cloneNode(false);
@@ -765,6 +779,10 @@ function initGL(){
     gl = glc.getContext('webgl2', {alpha:true, premultipliedAlpha:false, antialias:false,
       depth:false, stencil:false, powerPreference:'high-performance'});
     if(!gl) return false;
+    // 不能与底下的 2D 画布合成(alpha=false)时,GL 画布会盖成不透明黑 → 直接放弃 GL
+    const at = gl.getContextAttributes ? gl.getContextAttributes() : null;
+    if(at && at.alpha === false) return false;
+    glc.addEventListener('webglcontextlost', e=>{ e.preventDefault(); GL_LOST = true; }, false);
     const vsh = `#version 300 es
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec2 aPos;
@@ -829,6 +847,11 @@ function glRendererString(){
     return ext? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'WebGL2';
   }catch(e){ return 'WebGL2'; }
 }
+function fallbackTo2D(){
+  GL_LOST = false;
+  try{ resetGLCanvas(); }catch(e){}
+  RENDERER = {kind:'canvas2d', gpuName:'Canvas2D 兜底', tag:'软件渲染'};
+}
 function renderGL(){
   gl.viewport(0,0,glc.width,glc.height);
   gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -839,27 +862,29 @@ function renderGL(){
   gl.bindVertexArray(vao);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instN);
 }
-/* 自检:真画一只猪再回读中心像素,确认 GL 通道真的出图(防驱动静默失败) */
-function glLooksAlive(){
+/* 探活:在一次性小画布上验证"GPU 真的光栅化且能回读",绝不碰主画布 */
+function glSanity(){
   try{
-    const savedN = instN;
-    INST[0]=W/2; INST[1]=H/2; INST[2]=SPR; INST[3]=1; INST[4]=1; INST[5]=0;
-    instN = 1;
-    renderGL();
+    const c2 = document.createElement('canvas'); c2.width = c2.height = 4;
+    const g2 = c2.getContext('webgl2', {alpha:false, antialias:false, depth:false, stencil:false});
+    if(!g2) return false;
+    g2.clearColor(.25,.5,.75,1); g2.clear(g2.COLOR_BUFFER_BIT);
     const px = new Uint8Array(4);
-    gl.readPixels(glc.width>>1, glc.height>>1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    instN = savedN;
-    return px[3] > 8;
+    g2.readPixels(1,1,1,1,g2.RGBA,g2.UNSIGNED_BYTE,px);
+    const ok = px[2] > 90;
+    const lc = g2.getExtension('WEBGL_lose_context');
+    if(lc) lc.loseContext();
+    return ok;
   }catch(e){ return false; }
 }
 let RENDERER = {kind:'canvas2d', gpuName:'软件渲染', tag:'软件渲染'};
 function initRenderer(){
-  if(initGL()){
+  if(glSanity() && initGL()){
     const s = glRendererString();
-    if(glLooksAlive()) return {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]};
-    resetGLCanvas();                     // GL 配好了却不出图 → 换新画布,退回 2D
+    return {kind:'webgl2', gpuName:s, tag: classifyGPU(s)[0]};
   }
-  return {kind:'canvas2d', gpuName:'软件渲染 · Canvas2D', tag:'软件渲染'};
+  try{ resetGLCanvas(); }catch(e){}
+  return {kind:'canvas2d', gpuName:'Canvas2D 兜底', tag:'软件渲染'};
 }
 
 /* ══ 缓存渐变与图案 ═══════════════════════════════════════ */
@@ -964,10 +989,10 @@ function render2d(t){
   if(RENDERER.kind === 'canvas2d'){
     for(let k=0;k<aliveN;k++){
       const i = ALIVE[k];
-      const a = PH[i] === 2? AL[i]*.55 : 1;
+      const wet = PH[i] === 2;
       const d = SPR*SC[i];
-      ctx.globalAlpha = a;
-      ctx.drawImage(pigSprites[VAR[i]], PX[i]-d/2, PY[i]-d/2, d, d);
+      ctx.globalAlpha = wet? AL[i]*.62 : 1;
+      ctx.drawImage(wet? underSprites[VAR[i]] : pigSprites[VAR[i]], PX[i]-d/2, PY[i]-d/2, d, d);
     }
     ctx.globalAlpha = 1;
   }
@@ -1027,7 +1052,7 @@ function render2d(t){
   ctx.globalAlpha = 1;
   // 冲击波
   if(shock.a > 0){
-    ctx.strokeStyle = `rgba(255,255,255,${shock.a})`; ctx.lineWidth = 5;
+    ctx.strokeStyle = `rgba(255,255,255,${shock.a*.8})`; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.ellipse(shock.x, WATER_Y+8, shock.r, shock.r*.16, 0, 0, TAU); ctx.stroke();
   }
   // 蘑菇水雾
@@ -1125,9 +1150,13 @@ function pushHero(x,y,tile,s){
 }
 
 /* ══ 画质档 ═══════════════════════════════════════════════ */
-let causticOn = true, grainOn = true;
+let causticOn = true, grainOn = true, SAFE = false;
+const MAX_PIXELS = 2.6e6;          // 后备缓冲总像素上限,压住移动端显存压力
 function applyQuality(q){
-  RS = [.75, 1, DPR][q];
+  const base = [.75, 1, DPR][q];
+  const capPx = Math.sqrt(MAX_PIXELS / (W*H));
+  const capVp = innerWidth < 900? 1 : capPx;
+  RS = Math.max(.5, Math.min(base, capPx, SAFE? 1 : capVp));
   dropBudget   = [0, 1, 3][q];
   rippleBudget = [.2, .5, 1][q];
   bubbleBudget = [.3, .65, 1][q];
@@ -1153,11 +1182,16 @@ function fitCanvas(){
 
 /* ══ 主循环 ═══════════════════════════════════════════════ */
 const $ = id => document.getElementById(id);
-const statEl = $('stat'), countEl = $('count');
+const statEl = $('stat'), countEl = $('count'), diagEl = $('diag');
 let last = performance.now(), fps = 60, hudT = 0, acc = 0, qCheck = 0, quality = 2;
-let fpsFrames = 0, fpsTime = 0, fpsShown = 60;
+let fpsFrames = 0, fpsTime = 0, errOnce = null, frames = 0;
 function loop(now){
   requestAnimationFrame(loop);
+  try{ frame(now); }
+  catch(e){ if(!errOnce) errOnce = ((e && e.name) || 'ERR') + ': ' + ((e && e.message) || e); }
+}
+function frame(now){
+  frames++;
   let dt = (now - last)/1000; last = now;
   if(dt > .1) dt = .1;
   fpsFrames++; fpsTime += dt;
@@ -1172,7 +1206,10 @@ function loop(now){
   const t = now/1000;
   buildInstances(t);
   render2d(t);
-  if(RENDERER.kind === 'webgl2') renderGL();
+  if(RENDERER.kind === 'webgl2'){
+    if(GL_LOST || (gl && gl.isContextLost && gl.isContextLost())) fallbackTo2D();
+    else renderGL();
+  }
   qCheck += dt;
   if(qCheck > 1.2){
     qCheck = 0;
@@ -1187,14 +1224,24 @@ function loop(now){
     statEl.innerHTML =
       `<span style="opacity:.7">${RENDERER.gpuName.slice(0,20)}</span> ${RENDERER.tag} · ` +
       `<span class="${cls}">${Math.round(fps)} FPS</span> · 在场 ${aliveN.toLocaleString()} · Q${quality}`;
+    diagEl.textContent =
+      `${RENDERER.kind}  ${Math.round(fps)}fps  f${frames}\n` +
+      `canvas ${glc.width}x${glc.height} @${RS.toFixed(2)} dpr${DPR.toFixed(2)}\n` +
+      `alive ${aliveN}  dived ${total}\n` +
+      (errOnce ? 'ERR ' + errOnce.slice(0, 68) : (GL_LOST ? 'GL LOST → 2D' : 'render ok'));
     if(total >= 100000) $('ach').style.display = 'inline';
   }
 }
 async function main(){
   const Q = new URLSearchParams(location.search);
   const PRE = Math.min(parseFloat(Q.get('t') || '0') || 0, 120);
+  SAFE = Q.get('safe') === '1';
   for(let i=0; i < PRE*60; i++) update(STEP, i*STEP);
-  RENDERER = await initRenderer();
+  if(Q.get('c2d') === '1'){
+    RENDERER = {kind:'canvas2d', gpuName:'强制 Canvas2D', tag:'软件渲染'};
+  } else {
+    RENDERER = await initRenderer();
+  }
   applyQuality(quality);
   $('rateV').textContent = rate.toLocaleString();
   if(Q.get('deer') === '1')
